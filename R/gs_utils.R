@@ -7,8 +7,36 @@ suppressPackageStartupMessages({
   library(readr)
   library(lubridate)
   library(glue)
+  library(base64enc)
 })
 
+cred_from_env <- function() {
+  b64 <- Sys.getenv("GSA_JSON_B64", "")
+  if (nzchar(b64)) {
+    # needs base64enc in DESCRIPTION/renv
+    if (!requireNamespace("base64enc", quietly = TRUE)) {
+      stop("Please add base64enc to your dependencies.")
+    }
+    keyfile <- tempfile(fileext = ".json")
+    writeBin(base64enc::base64decode(b64), keyfile)
+    Sys.setenv(GOOGLE_APPLICATION_CREDENTIALS = keyfile)
+  }
+}
+
+# Update your .gs_auth() to call it:
+.gs_auth <- function() {
+  cred_from_env()  # <--- NEW: resolves GOOGLE_APPLICATION_CREDENTIALS if provided as base64
+  sa_path <- Sys.getenv("GOOGLE_APPLICATION_CREDENTIALS", unset = NA)
+  if (!is.na(sa_path) && file.exists(sa_path)) {
+    googlesheets4::gs4_auth(path = sa_path,
+                            scopes = "https://www.googleapis.com/auth/spreadsheets")
+    googledrive::drive_auth(path = sa_path)
+  } else {
+    # For local dev with interactive OAuth; in Connect this path shouldn't be used
+    googlesheets4::gs4_auth(cache = TRUE)
+    googledrive::drive_auth(cache = TRUE)
+  }
+}
 
 `%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || (is.atomic(x) && all(is.na(x)))) y else x
 
