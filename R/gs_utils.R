@@ -10,47 +10,60 @@ suppressPackageStartupMessages({
   library(base64enc)
 })
 
-cred_from_env <- function() {
-  b64 <- Sys.getenv("GSA_JSON_B64", "")
-  if (nzchar(b64)) {
-    # needs base64enc in DESCRIPTION/renv
-    if (!requireNamespace("base64enc", quietly = TRUE)) {
-      stop("Please add base64enc to your dependencies.")
-    }
-    keyfile <- tempfile(fileext = ".json")
-    writeBin(base64enc::base64decode(b64), keyfile)
-    Sys.setenv(GOOGLE_APPLICATION_CREDENTIALS = keyfile)
-  }
-}
-
-# Update your .gs_auth() to call it:
-.gs_auth <- function() {
-  cred_from_env()  # <--- NEW: resolves GOOGLE_APPLICATION_CREDENTIALS if provided as base64
-  sa_path <- Sys.getenv("GOOGLE_APPLICATION_CREDENTIALS", unset = NA)
-  if (!is.na(sa_path) && file.exists(sa_path)) {
-    googlesheets4::gs4_auth(path = sa_path,
-                            scopes = "https://www.googleapis.com/auth/spreadsheets")
-    googledrive::drive_auth(path = sa_path)
-  } else {
-    # For local dev with interactive OAuth; in Connect this path shouldn't be used
-    googlesheets4::gs4_auth(cache = TRUE)
-    googledrive::drive_auth(cache = TRUE)
-  }
-}
+suppressPackageStartupMessages({
+  library(googlesheets4)
+  library(googledrive)
+  library(lubridate)
+})
 
 `%||%` <- function(x, y) if (is.null(x) || length(x) == 0 || (is.atomic(x) && all(is.na(x)))) y else x
 
+cred_from_env <- function() {
+  # 1) If GOOGLE_APPLICATION_CREDENTIALS already points to a file, use it.
+  sa_path <- Sys.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+  if (nzchar(sa_path) && file.exists(sa_path)) return(sa_path)
+  
+  # 2) Raw JSON in env var GSA_JSON (accepts your current value)
+  raw_json <- Sys.getenv("GSA_JSON", "")
+  if (nzchar(raw_json) && startsWith(trimws(raw_json), "{")) {
+    keyfile <- tempfile(fileext = ".json")
+    writeChar(raw_json, keyfile, eos = NULL, useBytes = TRUE)
+    Sys.setenv(GOOGLE_APPLICATION_CREDENTIALS = keyfile)
+    return(keyfile)
+  }
+  
+  # 3) Base64 JSON in env var GSA_JSON_B64
+  b64 <- Sys.getenv("GSA_JSON_B64", "")
+  if (nzchar(b64)) {
+    if (!requireNamespace("base64enc", quietly = TRUE)) {
+      stop("Please add `base64enc` to your dependencies (renv::install('base64enc')).")
+    }
+    # tolerate accidental quotes/newlines
+    b64 <- gsub("\\s+", "", b64)
+    b64 <- sub('^\"', "", sub('\"$', "", b64))
+    raw <- try(base64enc::base64decode(b64), silent = TRUE)
+    if (inherits(raw, "try-error")) stop("GSA_JSON_B64 is not valid base64.")
+    keyfile <- tempfile(fileext = ".json")
+    writeBin(raw, keyfile)
+    Sys.setenv(GOOGLE_APPLICATION_CREDENTIALS = keyfile)
+    return(keyfile)
+  }
+  
+  ""  # nothing found
+}
 
 .gs_auth <- function() {
-  # Use a service account if GOOGLE_APPLICATION_CREDENTIALS is set
-  sa_path <- Sys.getenv("GOOGLE_APPLICATION_CREDENTIALS", unset = NA)
-  if (!is.na(sa_path) && file.exists(sa_path)) {
-    gs4_auth(path = sa_path, scopes = "https://www.googleapis.com/auth/spreadsheets")
-    drive_auth(path = sa_path)
+  keyfile <- cred_from_env()
+  if (nzchar(keyfile) && file.exists(keyfile)) {
+    googlesheets4::gs4_auth(path = keyfile,
+                            scopes = "https://www.googleapis.com/auth/spreadsheets")
+    googledrive::drive_auth(path = keyfile)
+    message(sprintf("[gs_auth] Service account loaded (size %d bytes).", file.size(keyfile)))
   } else {
-    # Falls back to interactive OAuth for local dev
-    gs4_auth(cache = TRUE)
-    drive_auth(cache = TRUE)
+    # Interactive fallback for local dev only
+    googlesheets4::gs4_auth(cache = TRUE)
+    googledrive::drive_auth(cache = TRUE)
+    message("[gs_auth] WARNING: using interactive OAuth (likely wrong on Connect).")
   }
 }
 
