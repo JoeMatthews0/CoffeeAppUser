@@ -1,4 +1,4 @@
-# app_user.R — robust "remember me" with localStorage + server-side update
+# app_user.R — solid "remember me" via server<->client handshake
 
 suppressPackageStartupMessages({
   library(shiny)
@@ -13,18 +13,18 @@ suppressPackageStartupMessages({
 ensure_sheets_exist()
 CFG <- read_config()
 
-ui <- page_fluid(
+ui <- fluidPage(  # using classic layout (works everywhere)
   theme = bs_theme(version = 5),
   useShinyjs(),
   
-  # Robust persist/restore script
+  # Client helpers
   tags$head(tags$script(HTML("
     function c_trim(s){ return (s||'').replace(/^\\s+|\\s+$/g,''); }
     function c_set(key,val){
       try{
         val = c_trim(val);
         if(val){ localStorage.setItem(key, val); }
-        else { localStorage.removeItem(key); } // don't keep blanks/spaces
+        else { localStorage.removeItem(key); }
       }catch(e){}
     }
     function c_get(key){
@@ -38,42 +38,40 @@ ui <- page_fluid(
       el.dispatchEvent(new Event('change', {bubbles:true}));
     }
 
-    document.addEventListener('shiny:connected', function(){
+    // Server asks for identity -> send it back via input$ls_restore
+    Shiny.addCustomMessageHandler('requestIdentity', function(x){
       var sid  = c_get('coffee_staff_id');
       var name = c_get('coffee_name');
-
-      // 1) Directly populate the DOM inputs (client-side)
+      // also pre-fill DOM immediately just for UX
       if(sid)  c_fillInput('staff_id', sid);
       if(name) c_fillInput('name', name);
-
-      // 2) Also tell the server to update (covers any timing quirks)
       if (window.Shiny) {
         Shiny.setInputValue('ls_restore', { sid: sid, name: name }, {priority:'event'});
       }
     });
 
-    // Let server persist too (used on submit)
+    // Server can persist explicitly too (e.g., after submit)
     Shiny.addCustomMessageHandler('persistIdentity', function(x){
-      if (x.sid !== undefined)  c_set('coffee_staff_id', x.sid);
-      if (x.name !== undefined) c_set('coffee_name', x.name);
+      if (x.sid  !== undefined) c_set('coffee_staff_id', x.sid);
+      if (x.name !== undefined) c_set('coffee_name',    x.name);
     });
   "))),
   
   titlePanel("☕ Coffee Club – Log Coffees"),
-  layout_columns(
+  fluidRow(
     column(6,
-      card(
-        card_header("Your details"),
-        textInput("staff_id", "Staff ID", placeholder = "e.g. A1234"),
-        textInput("name", "Name", placeholder = "First Last"),
-        numericInput("coffees", "Number of coffees", value = 1, min = 1, step = 1),
-        actionButton("submit", "Log Coffee(s)", class = "btn-primary"),
-        div(class = "mt-2 text-muted", sprintf("Price per coffee: £%.2f", CFG$coffee_price))
-      )
+           card(
+             card_header("Your details"),
+             textInput("staff_id", "Staff ID", placeholder = "e.g. A1234"),
+             textInput("name",    "Name",     placeholder = "First Last"),
+             numericInput("coffees", "Number of coffees", value = 1, min = 1, step = 1),
+             actionButton("submit", "Log Coffee(s)", class = "btn-primary"),
+             div(class = "mt-2 text-muted", sprintf("Price per coffee: £%.2f", CFG$coffee_price))
+           )
     ),
     column(6,
-      card(card_header("Your balance"), uiOutput("balance_ui")),
-      card(card_header("Recent activity"), tableOutput("recent_tbl"))
+           card(card_header("Your balance"), uiOutput("balance_ui")),
+           card(card_header("Recent activity"), tableOutput("recent_tbl"))
     )
   )
 )
@@ -88,15 +86,21 @@ server <- function(input, output, session) {
   }
   refresh_recent <- function() {
     req(nzchar(input$staff_id))
-    recent <- read_transactions() |>
-      filter(staff_id == trimws(input$staff_id)) |>
-      arrange(desc(timestamp)) |>
-      mutate(amount = sprintf("£%.2f", amount)) |>
-      select(timestamp, type, coffees, amount, note)
-    recent_data(recent)
+    recent_data(
+      read_transactions() |>
+        filter(staff_id == trimws(input$staff_id)) |>
+        arrange(desc(timestamp)) |>
+        mutate(amount = sprintf("£%.2f", amount)) |>
+        select(timestamp, type, coffees, amount, note)
+    )
   }
   
-  # Restore from localStorage via server-side update as well
+  # 🔑 Ask the browser for stored values AFTER UI is bound
+  session$onFlushed(function() {
+    session$sendCustomMessage("requestIdentity", list())
+  }, once = TRUE)
+  
+  # When client returns stored values, set via updateTextInput (authoritative)
   observeEvent(input$ls_restore, {
     sid  <- input$ls_restore$sid  %||% ""
     name <- input$ls_restore$name %||% ""
@@ -105,7 +109,7 @@ server <- function(input, output, session) {
     if (nzchar(sid)) { refresh_balance(); refresh_recent() }
   }, ignoreInit = TRUE)
   
-  # Save to localStorage when fields change (only non-empty, trimmed)
+  # Persist on every edit (trim; never store blanks)
   observeEvent(input$staff_id, {
     sid <- trimws(input$staff_id)
     if (nzchar(sid)) {
@@ -141,7 +145,6 @@ server <- function(input, output, session) {
       need(nzchar(input$name), "Please enter your name."),
       need(is.numeric(input$coffees) && input$coffees >= 1, "Coffees must be >= 1")
     )
-    
     coffees <- as.integer(input$coffees)
     amount  <- -coffees * CFG$coffee_price
     
@@ -155,9 +158,10 @@ server <- function(input, output, session) {
       submitted_by = session$request$REMOTE_ADDR %||% "user-app"
     )
     
-    # Persist identity redundantly (server -> client) in case fields were empty before submit
+    # Persist identity redundantly (server -> client)
     session$sendCustomMessage("persistIdentity",
-                              list(sid = trimws(input$staff_id), name = trimws(input$name)))
+                              list(sid = trimws(input$staff_id), name = trimws(input$name))
+    )
     
     refresh_balance(); refresh_recent()
     showNotification(glue("Logged {coffees} coffee(s) = £{sprintf('%.2f', -amount)}"), type = "message")
