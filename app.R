@@ -1,5 +1,4 @@
-# app_user.R
-# Persists Staff ID + Name in the browser using localStorage (shinyjs)
+# app_user.R — remembers Staff ID + Name across visits using localStorage
 
 suppressPackageStartupMessages({
   library(shiny)
@@ -7,7 +6,7 @@ suppressPackageStartupMessages({
   library(glue)
   library(dplyr)
   library(tibble)
-  library(shinyjs)   # <-- NEW
+  library(shinyjs)   # for runjs
   source("R/gs_utils.R")
 })
 
@@ -16,19 +15,38 @@ CFG <- read_config()
 
 ui <- page_fluid(
   theme = bs_theme(version = 5),
-  useShinyjs(),  # <-- NEW: enable shinyjs
-  # JS: restore saved Staff ID/Name from localStorage on connect
+  useShinyjs(),
+  
+  # JS: restore saved Staff ID/Name on connect by populating inputs directly,
+  # then dispatching 'input' events so Shiny updates the reactive values.
   tags$script(HTML("
+    function coffeePersist(key, val) {
+      try { localStorage.setItem(key, val || ''); } catch(e) {}
+    }
+    function coffeeLoad(key) {
+      try { return localStorage.getItem(key) || ''; } catch(e) { return ''; }
+    }
+    function setInputValue(id, val){
+      var el = document.getElementById(id);
+      if(!el) return;
+      el.value = val || '';
+      // Fire the input event so Shiny sees the change immediately
+      el.dispatchEvent(new Event('input', {bubbles:true}));
+      el.dispatchEvent(new Event('change', {bubbles:true}));
+    }
     document.addEventListener('shiny:connected', function() {
-      try {
-        const sid  = localStorage.getItem('coffee_staff_id') || '';
-        const name = localStorage.getItem('coffee_name') || '';
-        if (sid || name) {
-          Shiny.setInputValue('ls_restore', {sid: sid, name: name}, {priority: 'event'});
-        }
-      } catch (e) { /* ignore */ }
+      var sid  = coffeeLoad('coffee_staff_id');
+      var name = coffeeLoad('coffee_name');
+      if (sid)  setInputValue('staff_id', sid);
+      if (name) setInputValue('name', name);
+    });
+    // Allow server to persist via a custom message too
+    Shiny.addCustomMessageHandler('persistIdentity', function(x){
+      if (x.sid !== undefined)  coffeePersist('coffee_staff_id', x.sid);
+      if (x.name !== undefined) coffeePersist('coffee_name', x.name);
     });
   ")),
+  
   titlePanel("☕ Coffee Club – Log Coffees"),
   layout_columns(
     column(6,
@@ -42,14 +60,8 @@ ui <- page_fluid(
       )
     ),
     column(6,
-      card(
-        card_header("Your balance"),
-        uiOutput("balance_ui")
-      ),
-      card(
-        card_header("Recent activity"),
-        tableOutput("recent_tbl")
-      )
+      card(card_header("Your balance"), uiOutput("balance_ui")),
+      card(card_header("Recent activity"), tableOutput("recent_tbl"))
     )
   )
 )
@@ -63,7 +75,6 @@ server <- function(input, output, session) {
     req(nzchar(input$staff_id))
     balance_data(balance_of(trimws(input$staff_id)))
   }
-  
   refresh_recent <- function() {
     req(nzchar(input$staff_id))
     recent <- read_transactions() |>
@@ -74,25 +85,19 @@ server <- function(input, output, session) {
     recent_data(recent)
   }
   
-  # Restore saved Staff ID/Name from localStorage (sent by the JS block in UI)
-  observeEvent(input$ls_restore, {
-    if (isTruthy(input$ls_restore$sid)) {
-      updateTextInput(session, "staff_id", value = input$ls_restore$sid)
-    }
-    if (isTruthy(input$ls_restore$name)) {
-      updateTextInput(session, "name", value = input$ls_restore$name)
-    }
-    # After updating fields, refresh UI
-    refresh_balance()
-    refresh_recent()
-  }, ignoreInit = TRUE)
-  
-  # Also refresh when staff_id changes manually
+  # Persist on every change (so closing the tab still remembers)
   observeEvent(input$staff_id, {
     if (nzchar(input$staff_id)) {
-      refresh_balance()
-      refresh_recent()
+      runjs(sprintf("coffeePersist('coffee_staff_id', %s);",
+                    jsonlite::toJSON(trimws(input$staff_id), auto_unbox = TRUE)))
+      # also refresh balance/history when the ID changes
+      refresh_balance(); refresh_recent()
     }
+  }, ignoreInit = FALSE)
+  
+  observeEvent(input$name, {
+    runjs(sprintf("coffeePersist('coffee_name', %s);",
+                  jsonlite::toJSON(trimws(input$name), auto_unbox = TRUE)))
   }, ignoreInit = FALSE)
   
   output$balance_ui <- renderUI({
@@ -130,19 +135,16 @@ server <- function(input, output, session) {
       submitted_by = session$request$REMOTE_ADDR %||% "user-app"
     )
     
-    # Save to localStorage for next visit (sticky identity)
-    runjs(sprintf("
-      try {
-        localStorage.setItem('coffee_staff_id', %s);
-        localStorage.setItem('coffee_name', %s);
-      } catch(e) { /* ignore */ }
-    ", jsonlite::toJSON(trimws(input$staff_id)), jsonlite::toJSON(trimws(input$name))))
+    # Persist identity (redundant with on-change, but safe)
+    session$sendCustomMessage("persistIdentity",
+                              list(sid = trimws(input$staff_id), name = trimws(input$name)))
     
     # Instant UI refresh after write
     refresh_balance()
     refresh_recent()
     
-    showNotification(glue("Logged {coffees} coffee(s) = £{sprintf('%.2f', -amount)}"), type = "message")
+    showNotification(glue("Logged {coffees} coffee(s) = £{sprintf('%.2f', -amount)}"),
+                     type = "message")
   })
   
   output$recent_tbl <- renderTable({

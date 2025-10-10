@@ -6,12 +6,10 @@
 library(qrcode)
 
 
-user_app_url <- "https://your-deployment.example.com/coffee-user" # <-- replace
-outfile <- "qr_coffee_user.png"
+user_app_url <- "https://joematthews-coffeetracker.share.connect.posit.cloud/" # <-- replace
 
 
-qr_code(user_app_url, ecl = "M", plotQRcode = FALSE, dataOutput = FALSE,
-        mask = TRUE, filename = outfile)
+plot(qr_code(user_app_url, ecl = "M"))
 
 
 message("Saved ", outfile, ". Print and stick it by the machine.")
