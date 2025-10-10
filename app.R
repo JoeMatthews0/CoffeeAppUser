@@ -61,7 +61,7 @@ ui <- page_fluid(
   
   titlePanel("☕ Coffee Club – Log Coffees"),
   layout_columns(
-    col_6(
+    column(6,
       card(
         card_header("Your details"),
         textInput("staff_id", "Staff ID", placeholder = "e.g. A1234"),
@@ -71,7 +71,7 @@ ui <- page_fluid(
         div(class = "mt-2 text-muted", sprintf("Price per coffee: £%.2f", CFG$coffee_price))
       )
     ),
-    col_6(
+    column(6,
       card(card_header("Your balance"), uiOutput("balance_ui")),
       card(card_header("Recent activity"), tableOutput("recent_tbl"))
     )
