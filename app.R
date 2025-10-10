@@ -1,4 +1,4 @@
-# app_user.R — remembers Staff ID + Name across visits using localStorage
+# app_user.R — robust "remember me" with localStorage + server-side update
 
 suppressPackageStartupMessages({
   library(shiny)
@@ -6,7 +6,7 @@ suppressPackageStartupMessages({
   library(glue)
   library(dplyr)
   library(tibble)
-  library(shinyjs)   # for runjs
+  library(shinyjs)
   source("R/gs_utils.R")
 })
 
@@ -17,39 +17,51 @@ ui <- page_fluid(
   theme = bs_theme(version = 5),
   useShinyjs(),
   
-  # JS: restore saved Staff ID/Name on connect by populating inputs directly,
-  # then dispatching 'input' events so Shiny updates the reactive values.
-  tags$script(HTML("
-    function coffeePersist(key, val) {
-      try { localStorage.setItem(key, val || ''); } catch(e) {}
+  # Robust persist/restore script
+  tags$head(tags$script(HTML("
+    function c_trim(s){ return (s||'').replace(/^\\s+|\\s+$/g,''); }
+    function c_set(key,val){
+      try{
+        val = c_trim(val);
+        if(val){ localStorage.setItem(key, val); }
+        else { localStorage.removeItem(key); } // don't keep blanks/spaces
+      }catch(e){}
     }
-    function coffeeLoad(key) {
-      try { return localStorage.getItem(key) || ''; } catch(e) { return ''; }
+    function c_get(key){
+      try{ return c_trim(localStorage.getItem(key)||''); }catch(e){ return ''; }
     }
-    function setInputValue(id, val){
+    function c_fillInput(id, val){
       var el = document.getElementById(id);
       if(!el) return;
       el.value = val || '';
-      // Fire the input event so Shiny sees the change immediately
       el.dispatchEvent(new Event('input', {bubbles:true}));
       el.dispatchEvent(new Event('change', {bubbles:true}));
     }
-    document.addEventListener('shiny:connected', function() {
-      var sid  = coffeeLoad('coffee_staff_id');
-      var name = coffeeLoad('coffee_name');
-      if (sid)  setInputValue('staff_id', sid);
-      if (name) setInputValue('name', name);
+
+    document.addEventListener('shiny:connected', function(){
+      var sid  = c_get('coffee_staff_id');
+      var name = c_get('coffee_name');
+
+      // 1) Directly populate the DOM inputs (client-side)
+      if(sid)  c_fillInput('staff_id', sid);
+      if(name) c_fillInput('name', name);
+
+      // 2) Also tell the server to update (covers any timing quirks)
+      if (window.Shiny) {
+        Shiny.setInputValue('ls_restore', { sid: sid, name: name }, {priority:'event'});
+      }
     });
-    // Allow server to persist via a custom message too
+
+    // Let server persist too (used on submit)
     Shiny.addCustomMessageHandler('persistIdentity', function(x){
-      if (x.sid !== undefined)  coffeePersist('coffee_staff_id', x.sid);
-      if (x.name !== undefined) coffeePersist('coffee_name', x.name);
+      if (x.sid !== undefined)  c_set('coffee_staff_id', x.sid);
+      if (x.name !== undefined) c_set('coffee_name', x.name);
     });
-  ")),
+  "))),
   
   titlePanel("☕ Coffee Club – Log Coffees"),
   layout_columns(
-    column(6,
+    col_6(
       card(
         card_header("Your details"),
         textInput("staff_id", "Staff ID", placeholder = "e.g. A1234"),
@@ -59,7 +71,7 @@ ui <- page_fluid(
         div(class = "mt-2 text-muted", sprintf("Price per coffee: £%.2f", CFG$coffee_price))
       )
     ),
-    column(6,
+    col_6(
       card(card_header("Your balance"), uiOutput("balance_ui")),
       card(card_header("Recent activity"), tableOutput("recent_tbl"))
     )
@@ -67,7 +79,6 @@ ui <- page_fluid(
 )
 
 server <- function(input, output, session) {
-  # Local reactive stores (event-driven, no polling)
   recent_data  <- reactiveVal(tibble())
   balance_data <- reactiveVal(tibble())
   
@@ -85,19 +96,29 @@ server <- function(input, output, session) {
     recent_data(recent)
   }
   
-  # Persist on every change (so closing the tab still remembers)
+  # Restore from localStorage via server-side update as well
+  observeEvent(input$ls_restore, {
+    sid  <- input$ls_restore$sid  %||% ""
+    name <- input$ls_restore$name %||% ""
+    if (nzchar(sid))  updateTextInput(session, "staff_id", value = sid)
+    if (nzchar(name)) updateTextInput(session, "name",     value = name)
+    if (nzchar(sid)) { refresh_balance(); refresh_recent() }
+  }, ignoreInit = TRUE)
+  
+  # Save to localStorage when fields change (only non-empty, trimmed)
   observeEvent(input$staff_id, {
-    if (nzchar(input$staff_id)) {
-      runjs(sprintf("coffeePersist('coffee_staff_id', %s);",
-                    jsonlite::toJSON(trimws(input$staff_id), auto_unbox = TRUE)))
-      # also refresh balance/history when the ID changes
+    sid <- trimws(input$staff_id)
+    if (nzchar(sid)) {
+      runjs(sprintf("c_set('coffee_staff_id', %s);", jsonlite::toJSON(sid, auto_unbox=TRUE)))
       refresh_balance(); refresh_recent()
     }
   }, ignoreInit = FALSE)
   
   observeEvent(input$name, {
-    runjs(sprintf("coffeePersist('coffee_name', %s);",
-                  jsonlite::toJSON(trimws(input$name), auto_unbox = TRUE)))
+    nm <- trimws(input$name)
+    if (nzchar(nm)) {
+      runjs(sprintf("c_set('coffee_name', %s);", jsonlite::toJSON(nm, auto_unbox=TRUE)))
+    }
   }, ignoreInit = FALSE)
   
   output$balance_ui <- renderUI({
@@ -105,14 +126,13 @@ server <- function(input, output, session) {
     b <- balance_data()
     name <- ifelse(nrow(b) == 0 || is.na(b$name[1]), input$name, b$name[1])
     balance <- if (nrow(b) == 0) 0 else (b$balance[1] %||% 0)
-    status <- if (balance < CFG$topup_threshold) {
-      div(class = "alert alert-warning",
+    if (balance < CFG$topup_threshold) {
+      div(class="alert alert-warning",
           glue("Current balance for {name} ({input$staff_id}): £{sprintf('%.2f', balance)} – please top up."))
     } else {
-      div(class = "alert alert-success",
+      div(class="alert alert-success",
           glue("Current balance for {name} ({input$staff_id}): £{sprintf('%.2f', balance)}"))
     }
-    tagList(status)
   })
   
   observeEvent(input$submit, {
@@ -135,21 +155,15 @@ server <- function(input, output, session) {
       submitted_by = session$request$REMOTE_ADDR %||% "user-app"
     )
     
-    # Persist identity (redundant with on-change, but safe)
+    # Persist identity redundantly (server -> client) in case fields were empty before submit
     session$sendCustomMessage("persistIdentity",
                               list(sid = trimws(input$staff_id), name = trimws(input$name)))
     
-    # Instant UI refresh after write
-    refresh_balance()
-    refresh_recent()
-    
-    showNotification(glue("Logged {coffees} coffee(s) = £{sprintf('%.2f', -amount)}"),
-                     type = "message")
+    refresh_balance(); refresh_recent()
+    showNotification(glue("Logged {coffees} coffee(s) = £{sprintf('%.2f', -amount)}"), type = "message")
   })
   
-  output$recent_tbl <- renderTable({
-    head(recent_data(), 10)
-  })
+  output$recent_tbl <- renderTable(head(recent_data(), 10))
 }
 
 shinyApp(ui, server)
