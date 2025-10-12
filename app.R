@@ -1,5 +1,8 @@
 # app_user.R — solid "remember me" via server<->client handshake
 
+# TODO: Add 'Check Balance' button, displays current balance
+# TODO: Add 'Check Recent Activity' button, displays recent activity table with dropdown menu for 'All activity', 'Coffees', 'Top ups'
+
 suppressPackageStartupMessages({
   library(shiny)
   library(bslib)
@@ -19,17 +22,25 @@ ui <- fluidPage(  # using classic layout (works everywhere)
   
   # Client helpers
   tags$head(tags$script(HTML("
+    // c_trim removes whitespace from inputs, avoids issues of trailing spaces after names etc causing duplicate profiles
     function c_trim(s){ return (s||'').replace(/^\\s+|\\s+$/g,''); }
+    // c_set stores variables in localStorage -- needed for the name autofill feature
     function c_set(key,val){
       try{
+        // Trim the val input of any whitespace
         val = c_trim(val);
+        // If val exists, i.e. if there's an input to be stored, store it in localStorage
         if(val){ localStorage.setItem(key, val); }
+        // If the input is blank
         else { localStorage.removeItem(key); }
       }catch(e){}
     }
+    // c_get outputs the value stored in localStorage, e.g. the most recently entered name of staff_id
+    // If there is nothing with that key available in localStorage, it returns ''
     function c_get(key){
       try{ return c_trim(localStorage.getItem(key)||''); }catch(e){ return ''; }
     }
+    // c_fillInput populates fields (e.g. name or staff_id) with their values from LocalStorage when used alongside c_get
     function c_fillInput(id, val){
       var el = document.getElementById(id);
       if(!el) return;
@@ -40,9 +51,12 @@ ui <- fluidPage(  # using classic layout (works everywhere)
 
     // Server asks for identity -> send it back via input$ls_restore
     Shiny.addCustomMessageHandler('requestIdentity', function(x){
+      // Extract staff_id from localStorage (if exists) and save as sid
       var sid  = c_get('coffee_staff_id');
+      // Same for name
       var name = c_get('coffee_name');
       // also pre-fill DOM immediately just for UX
+      // Populate the name/id input fields with their values from localStorage
       if(sid)  c_fillInput('staff_id', sid);
       if(name) c_fillInput('name', name);
       if (window.Shiny) {
@@ -51,6 +65,7 @@ ui <- fluidPage(  # using classic layout (works everywhere)
     });
 
     // Server can persist explicitly too (e.g., after submit)
+    // Store name and id in localStorage for future pulls
     Shiny.addCustomMessageHandler('persistIdentity', function(x){
       if (x.sid  !== undefined) c_set('coffee_staff_id', x.sid);
       if (x.name !== undefined) c_set('coffee_name',    x.name);
