@@ -1,8 +1,5 @@
 # app_user.R — solid "remember me" via server<->client handshake
 
-# TODO: Add 'Check Balance' button, displays current balance
-# TODO: Add 'Check Recent Activity' button, displays recent activity table with dropdown menu for 'All activity', 'Coffees', 'Top ups'
-
 suppressPackageStartupMessages({
   library(shiny)
   library(bslib)
@@ -72,7 +69,8 @@ ui <- fluidPage(  # using classic layout (works everywhere)
     });
   "))),
   
-  titlePanel("☕ Coffee Club – Log Coffees"),
+  titlePanel("MSP Coffee Club"),
+  p("If you encounter any issues using this app, please contact Joe Matthews"),
   fluidRow(
     column(6,
            card(
@@ -81,12 +79,33 @@ ui <- fluidPage(  # using classic layout (works everywhere)
              textInput("name",    "Name",     placeholder = "First Last"),
              numericInput("coffees", "Number of coffees", value = 1, min = 1, step = 1),
              actionButton("submit", "Log Coffee(s)", class = "btn-primary"),
+             actionButton("balance", "Check Balance", class = "btn-primary"),
+             actionButton("activity", "See Recent Activity", class = "btn-primary"),
              div(class = "mt-2 text-muted", sprintf("Price per coffee: £%.2f", CFG$coffee_price))
            )
     ),
     column(6,
-           card(card_header("Your balance"), uiOutput("balance_ui")),
-           card(card_header("Recent activity"), tableOutput("recent_tbl"))
+           conditionalPanel('input.balance % 2 == 1',
+                            card(card_header("Your balance"), uiOutput("balance_ui"))
+                            ),
+           conditionalPanel('input.activity % 2 == 1',
+                            card(card_header("Recent activity"), 
+                                 selectInput(inputId = "activityType", 
+                                             label = "Which activity would you like to see?", 
+                                             choices = c("All" = "all", 
+                                                         "Coffees" = "cof", 
+                                                         "Top-ups" = "top")), 
+                                 tableOutput("recent_tbl"),
+                                 p("How many transactions to display?"),
+                                 selectInput(inputId = "recentLength",
+                                             label = NULL,
+                                             choices = c("5" = "5",
+                                                         "10" = "10",
+                                                         "20" = "20",
+                                                         "All" = "all")
+                                 )
+                            )
+                            )
     )
   )
 )
@@ -103,10 +122,13 @@ server <- function(input, output, session) {
     req(nzchar(input$staff_id))
     recent_data(
       read_transactions() |>
-        filter(staff_id == trimws(input$staff_id)) |>
-        arrange(desc(timestamp)) |>
-        mutate(amount = sprintf("£%.2f", amount)) |>
-        select(timestamp, type, coffees, amount, note)
+        dplyr::filter(staff_id == trimws(input$staff_id)) |>
+        dplyr::arrange(dplyr::desc(timestamp)) |>
+        dplyr::mutate(
+          timestamp = format(timestamp, "%d-%m-%y %H:%M"),   # <- pretty string
+          amount    = sprintf("£%.2f", amount)
+        ) |>
+        dplyr::select(timestamp, type, coffees, amount, note)
     )
   }
   
@@ -145,7 +167,7 @@ server <- function(input, output, session) {
     b <- balance_data()
     name <- ifelse(nrow(b) == 0 || is.na(b$name[1]), input$name, b$name[1])
     balance <- if (nrow(b) == 0) 0 else (b$balance[1] %||% 0)
-    if (balance < CFG$topup_threshold) {
+    if (balance < CFG$coffee_price) {
       div(class="alert alert-warning",
           glue("Current balance for {name} ({input$staff_id}): £{sprintf('%.2f', balance)} – please top up."))
     } else {
@@ -182,7 +204,21 @@ server <- function(input, output, session) {
     showNotification(glue("Logged {coffees} coffee(s) = £{sprintf('%.2f', -amount)}"), type = "message")
   })
   
-  output$recent_tbl <- renderTable(head(recent_data(), 10))
+  filtered_data <- reactive({
+    switch(input$activityType,
+           "all" = recent_data(),
+           "cof" = recent_data() |> filter(type == "coffee") |> dplyr::select(-note),
+           "top" = recent_data() |> filter(type == "topup")
+    )
+  })
+  
+  recentRange <- reactive({
+    ifelse(input$recentLength == "all", 1e6, as.numeric(input$recentLength))
+  })
+  
+  output$recent_tbl <- renderTable(
+      head(filtered_data(), recentRange())
+    )
 }
 
 shinyApp(ui, server)

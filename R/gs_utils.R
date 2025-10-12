@@ -118,6 +118,7 @@ read_config <- function() {
   list(coffee_price = coffee_price, topup_threshold = topup_threshold)
 }
 
+print("read_transactions() using fix_timestamp()")
 
 set_config <- function(coffee_price = NULL, topup_threshold = NULL) {
   ss <- .sheet()
@@ -141,22 +142,44 @@ set_config <- function(coffee_price = NULL, topup_threshold = NULL) {
 coerce_numeric_safe <- function(x) suppressWarnings(as.numeric(x))
 coerce_integer_safe <- function(x) suppressWarnings(as.integer(x))
 
+fix_timestamp <- function(x, tz = Sys.timezone()) {
+  # Returns a POSIXct vector no matter what x is
+  suppressWarnings({
+    if (inherits(x, "POSIXt")) return(lubridate::with_tz(x, tz))
+    
+    if (is.numeric(x)) {
+      # Milliseconds since Unix epoch (e.g., 1697049600000)
+      if (any(x > 1e12, na.rm = TRUE))
+        return(lubridate::as_datetime(x / 1000, tz = tz))
+      # Seconds since Unix epoch (e.g., 1697049600)
+      if (any(x > 1e9, na.rm = TRUE))
+        return(lubridate::as_datetime(x, tz = tz))
+      # Excel/Sheets serial days since 1899-12-30 (e.g., 45678.5)
+      if (any(x > 20000 & x < 60000, na.rm = TRUE))
+        return(lubridate::as_datetime((x - 25569) * 86400, tz = tz))
+    }
+    
+    # Character ISO strings etc.
+    lubridate::as_datetime(x, tz = tz)
+  })
+}
+
 
 read_transactions <- function() {
   ss <- .sheet()
-  df <- read_sheet(ss, sheet = "transactions", col_types = "Tcccidcc") |>
-    mutate(
-      timestamp = with_tz(timestamp, tzone = Sys.timezone()),
-      coffees = coerce_integer_safe(coffees),
-      amount = coerce_numeric_safe(amount),
-      staff_id = as.character(staff_id),
-      name = as.character(name),
-      type = as.character(type),
-      note = as.character(note),
+  read_sheet(ss, sheet = "transactions", col_types = "Tcccidcc") |>
+    dplyr::mutate(
+      timestamp   = fix_timestamp(timestamp),
+      coffees     = coerce_integer_safe(coffees),
+      amount      = coerce_numeric_safe(amount),
+      staff_id    = as.character(staff_id),
+      name        = as.character(name),
+      type        = as.character(type),
+      note        = as.character(note),
       submitted_by= as.character(submitted_by)
     )
-  df
 }
+
 
 # One-off helper to fix any historical rows typed as text in Google Sheets
 repair_transactions_types <- function() {
