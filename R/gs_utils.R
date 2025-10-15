@@ -92,51 +92,48 @@ ensure_sheets_exist <- function() {
         type = character(), # "coffee" or "topup"
         coffees = integer(), # count for coffee rows
         amount = double(), # negative for coffees, positive for topups
-        note = character(),
         submitted_by = character()
       ),
       ss = ss,
       sheet = "transactions"
     )
   }
-  if (!"config" %in% existing) {
-    sheet_write(
-      tibble(key = c("coffee_price", "topup_threshold"),
-             value = c("0.5", "2.0")),
-      ss = ss,
-      sheet = "config"
-    )
-  }
+#  if (!"config" %in% existing) {
+#    sheet_write(
+#      tibble(key = c("coffee_price", "topup_threshold"),
+#             value = c("0.5", "2.0")),
+#      ss = ss,
+#      sheet = "config"
+#    )
+#  }
 }
 
-read_config <- function() {
-  ss <- .sheet()
-  cfg <- read_sheet(ss, sheet = "config", col_types = "cc") |>
-    mutate(value = suppressWarnings(as.numeric(value)))
-  coffee_price <- dplyr::coalesce(cfg$value[cfg$key == "coffee_price"], as.numeric(Sys.getenv("COFFEE_PRICE", 0.5)))
-  topup_threshold <- dplyr::coalesce(cfg$value[cfg$key == "topup_threshold"], as.numeric(Sys.getenv("TOPUP_THRESHOLD", 2)))
-  list(coffee_price = coffee_price, topup_threshold = topup_threshold)
-}
+#read_config <- function() {
+#  ss <- .sheet()
+#  cfg <- read_sheet(ss, sheet = "config", col_types = "cc") |>
+#    mutate(value = suppressWarnings(as.numeric(value)))
+#  coffee_price <- dplyr::coalesce(cfg$value[cfg$key == "coffee_price"], as.numeric(Sys.getenv("COFFEE_PRICE", 0.5)))
+#  topup_threshold <- dplyr::coalesce(cfg$value[cfg$key == "topup_threshold"], as.numeric(Sys.getenv("TOPUP_THRESHOLD", 2)))
+#  list(coffee_price = coffee_price, topup_threshold = topup_threshold)
+#}
 
-print("read_transactions() using fix_timestamp()")
-
-set_config <- function(coffee_price = NULL, topup_threshold = NULL) {
-  ss <- .sheet()
-  cfg <- tibble(
-    key = c("coffee_price", "topup_threshold"),
-    value = c(
-      if (!is.null(coffee_price)) as.character(coffee_price) else NA,
-      if (!is.null(topup_threshold)) as.character(topup_threshold) else NA
-    )
-  ) |>
-    filter(!is.na(value))
-  if (nrow(cfg)) {
-    existing <- tryCatch(read_sheet(ss, sheet = "config", col_types = "cc"), error = function(e) tibble())
-    out <- existing |>
-      rows_upsert(cfg, by = "key")
-    sheet_write(out, ss = ss, sheet = "config")
-  }
-}
+#set_config <- function(coffee_price = NULL, topup_threshold = NULL) {
+#  ss <- .sheet()
+#  cfg <- tibble(
+#    key = c("coffee_price", "topup_threshold"),
+ #   value = c(
+#      if (!is.null(coffee_price)) as.character(coffee_price) else NA,
+#      if (!is.null(topup_threshold)) as.character(topup_threshold) else NA
+#    )
+ # ) |>
+#    filter(!is.na(value))
+#  if (nrow(cfg)) {
+#    existing <- tryCatch(read_sheet(ss, sheet = "config", col_types = "cc"), error = function(e) tibble())
+#    out <- existing |>
+#      rows_upsert(cfg, by = "key")
+#    sheet_write(out, ss = ss, sheet = "config")
+#  }
+#}
 
 # ---- Robust read & type repair -------------------------------------------
 coerce_numeric_safe <- function(x) suppressWarnings(as.numeric(x))
@@ -167,7 +164,7 @@ fix_timestamp <- function(x, tz = Sys.timezone()) {
 
 read_transactions <- function() {
   ss <- .sheet()
-  read_sheet(ss, sheet = "transactions", col_types = "Tcccidcc") |>
+  read_sheet(ss, sheet = "transactions", col_types = "Tcccidc") |>
     dplyr::mutate(
       timestamp   = fix_timestamp(timestamp),
       coffees     = coerce_integer_safe(coffees),
@@ -175,7 +172,6 @@ read_transactions <- function() {
       staff_id    = as.character(staff_id),
       name        = as.character(name),
       type        = as.character(type),
-      note        = as.character(note),
       submitted_by= as.character(submitted_by)
     )
 }
@@ -194,7 +190,7 @@ repair_transactions_types <- function() {
 }
 
 
-append_transaction <- function(staff_id, name, type = c("coffee", "topup"), coffees = 0L, amount = 0, note = "", submitted_by = "app") {
+append_transaction <- function(staff_id, name, type = c("coffee", "topup"), coffees = 0L, amount = 0, submitted_by = "app") {
   type <- match.arg(type)
   ss <- .sheet()
   now <- lubridate::now(tzone = "UTC")
@@ -205,7 +201,6 @@ append_transaction <- function(staff_id, name, type = c("coffee", "topup"), coff
     type = type,
     coffees = as.integer(coffees),
     amount = as.numeric(amount),
-    note = as.character(note),
     submitted_by = as.character(submitted_by)
   )
   sheet_append(df, ss = ss, sheet = "transactions")
@@ -228,9 +223,9 @@ balances <- function() {
 }
 
 
-balance_of <- function(staff_id) {
+balance_of <- function(staff_id, staff_name) {
   b <- balances() |>
-    filter(staff_id == !!staff_id)
+    filter(staff_id == !!staff_id & name == !!staff_name)
   if (nrow(b) == 0) tibble(staff_id = staff_id, name = NA_character_, balance = 0, coffees = 0) else b
 }
 

@@ -11,10 +11,11 @@ suppressPackageStartupMessages({
 })
 
 ensure_sheets_exist()
-CFG <- read_config()
+
+coffee_price <- 0.2
 
 ui <- fluidPage(  # using classic layout (works everywhere)
-  theme = bs_theme(version = 5),
+  theme = bs_theme(bootswatch = "flatly"),
   useShinyjs(),
   
   # Client helpers
@@ -81,7 +82,7 @@ ui <- fluidPage(  # using classic layout (works everywhere)
              actionButton("submit", "Log Coffee(s)", class = "btn-primary"),
              actionButton("balance", "Check Balance", class = "btn-primary"),
              actionButton("activity", "See Recent Activity", class = "btn-primary"),
-             div(class = "mt-2 text-muted", sprintf("Price per coffee: £%.2f", CFG$coffee_price))
+             div(class = "mt-2 text-muted", sprintf("Price per coffee: £%.2f", coffee_price))
            )
     ),
     column(6,
@@ -115,8 +116,8 @@ server <- function(input, output, session) {
   balance_data <- reactiveVal(tibble())
   
   refresh_balance <- function() {
-    req(nzchar(input$staff_id))
-    balance_data(balance_of(trimws(input$staff_id)))
+    req(nzchar(input$staff_id) & nzchar(input$name))
+    balance_data(balance_of(trimws(input$staff_id), trimws(input$name)))
   }
   refresh_recent <- function() {
     req(nzchar(input$staff_id))
@@ -128,7 +129,7 @@ server <- function(input, output, session) {
           timestamp = format(timestamp, "%d-%m-%y %H:%M"),   # <- pretty string
           amount    = sprintf("£%.2f", amount)
         ) |>
-        dplyr::select(timestamp, type, coffees, amount, note)
+        dplyr::select(timestamp, type, coffees, amount, submitted_by)
     )
   }
   
@@ -163,16 +164,24 @@ server <- function(input, output, session) {
   }, ignoreInit = FALSE)
   
   output$balance_ui <- renderUI({
-    req(nzchar(input$staff_id))
-    b <- balance_data()
-    name <- ifelse(nrow(b) == 0 || is.na(b$name[1]), input$name, b$name[1])
-    balance <- if (nrow(b) == 0) 0 else (b$balance[1] %||% 0)
-    if (balance < CFG$coffee_price) {
+    if(!nzchar(input$staff_id) || !nzchar(input$name)){
       div(class="alert alert-warning",
-          glue("Current balance for {name} ({input$staff_id}): £{sprintf('%.2f', balance)} – please top up."))
-    } else {
-      div(class="alert alert-success",
-          glue("Current balance for {name} ({input$staff_id}): £{sprintf('%.2f', balance)}"))
+          glue("Please enter a staff ID and name to check balance. "))
+    } else{
+      b <- balance_data()
+      name <- ifelse(nrow(b) == 0 || is.na(b$name[1]), input$name, b$name[1])
+      balance <- if (nrow(b) == 0) 0 else (b$balance[1] %||% 0)
+      #if(nrow(b) == 0){
+      #  div(class="alert alert-warning",
+      #      glue("Current balance for {name} ({input$staff_id}): £{sprintf('%.2f', balance)} – please top up."))
+      #}
+      if (balance < 0) {
+        div(class="alert alert-warning",
+            glue("Current balance for {name} ({input$staff_id}): £{sprintf('%.2f', balance)} – please top up."))
+      } else {
+        div(class="alert alert-success",
+            glue("Current balance for {name} ({input$staff_id}): £{sprintf('%.2f', balance)}"))
+      }
     }
   })
   
@@ -183,7 +192,7 @@ server <- function(input, output, session) {
       need(is.numeric(input$coffees) && input$coffees >= 1, "Coffees must be >= 1")
     )
     coffees <- as.integer(input$coffees)
-    amount  <- -coffees * CFG$coffee_price
+    amount  <- -coffees * coffee_price
     
     append_transaction(
       staff_id = trimws(input$staff_id),
@@ -191,8 +200,7 @@ server <- function(input, output, session) {
       type     = "coffee",
       coffees  = coffees,
       amount   = amount,
-      note     = "coffee",
-      submitted_by = session$request$REMOTE_ADDR %||% "user-app"
+      submitted_by = trimws(input$name)
     )
     
     # Persist identity redundantly (server -> client)
@@ -207,7 +215,7 @@ server <- function(input, output, session) {
   filtered_data <- reactive({
     switch(input$activityType,
            "all" = recent_data(),
-           "cof" = recent_data() |> filter(type == "coffee") |> dplyr::select(-note),
+           "cof" = recent_data() |> filter(type == "coffee"),
            "top" = recent_data() |> filter(type == "topup")
     )
   })
