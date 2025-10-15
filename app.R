@@ -71,7 +71,7 @@ ui <- fluidPage(  # using classic layout (works everywhere)
   "))),
   
   titlePanel("MSP Coffee Club"),
-  p("If you encounter any issues using this app, please contact Joe Matthews"),
+  uiOutput("introText"),
   fluidRow(
     column(6,
            card(
@@ -112,6 +112,12 @@ ui <- fluidPage(  # using classic layout (works everywhere)
 )
 
 server <- function(input, output, session) {
+  
+  url = a("Joe Matthews", href="mailto:joe.matthews@ncl.ac.uk")
+  output$introText <- renderUI({
+    tagList("If you encounter any issues using this app, please contact ", url)
+  })
+  
   recent_data  <- reactiveVal(tibble())
   balance_data <- reactiveVal(tibble())
   
