@@ -76,8 +76,8 @@ ui <- fluidPage(  # using classic layout (works everywhere)
     column(6,
            card(
              card_header("Your details"),
-             textInput("staff_id", "Staff ID", placeholder = "e.g. A1234"),
-             textInput("name",    "Name",     placeholder = "First Last"),
+             textInput("staff_id", "Staff ID", placeholder = "e.g. nab123"),
+             textInput("name",    "Name",     placeholder = "FirstName LastName"),
              numericInput("coffees", "Number of coffees", value = 1, min = 1, step = 1),
              actionButton("submit", "Log Coffee(s)", class = "btn-primary"),
              actionButton("balance", "Check Balance", class = "btn-primary"),
